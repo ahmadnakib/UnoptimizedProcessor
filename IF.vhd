@@ -1,0 +1,96 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.all;
+USE ieee.numeric_std.all;
+USE STD.textio.all;
+USE ieee.std_logic_textio.all;
+
+ENTITY ifprocess IS
+	GENERIC(
+		ram_size : INTEGER := 4096
+	);
+	PORT(
+		clock: IN STD_LOGIC;
+		reset: in std_logic := '0';
+		
+		instruction: out std_logic_vector(31 downto 0);
+		nextAddress: OUT STD_LOGIC_VECTOR (31 DOWNTO 0);
+		
+		takenBranch: IN STD_LOGIC := '0';
+		BranchAddress: IN STD_LOGIC_VECTOR (31 DOWNTO 0);
+		
+		insert_stall: in std_logic := '0';
+      readfinish : in std_logic := '0'
+	);
+END ifprocess;
+
+--Array of memory, program counter, pc for next instruction, instruction index and final instruction
+ARCHITECTURE behavioral of ifprocess IS
+	TYPE MEM IS ARRAY(ram_size-1 downto 0) OF STD_LOGIC_VECTOR(7 DOWNTO 0);
+	
+	SIGNAL ram_block: MEM;
+	signal instruction_i: std_logic_vector(31 downto 0);
+   signal max_inst: integer :=0;
+	
+	signal programCounter: STD_LOGIC_VECTOR (31 DOWNTO 0):= (others => '0');
+	signal nextProgramCounter: STD_LOGIC_VECTOR (31 DOWNTO 0):= (others => '0');
+
+begin
+	--Read program text file into instruction mem.
+	readprogram: process (readfinish)
+		file program: text;
+		variable counter: integer := 0;
+		variable char : character:='0';
+		variable data_read: std_logic_vector(31 downto 0);
+		variable memoryLine: line;
+		variable status: file_open_status;
+		begin
+			--Reading begins here
+			--While we have not reached the end of the program, read the current line and the data in that line
+			--Data will be 32 bits
+			file_open(status,program,"program.txt", read_mode);
+			while not endfile(program) loop
+				readline(program,memoryLine);
+				read(memoryLine,data_read);
+				for i in 1 to 4 loop
+					ram_block(counter) <= data_read( 8*i-1 downto  8*i-8);
+					counter := counter+1;
+				end loop; 
+			end loop;
+		file_close(program);
+    max_inst <= counter - 4;
+	end process;
+
+	--Check if there is a branch, if so, go to the address where we area meant to branch to, otherwise, continue normally
+	process (nextProgramCounter,takenBranch)
+    begin
+	 if(takenBranch = '1') and (insert_stall = '0')then	
+		programCounter <= BranchAddress;
+	 elsif (insert_stall = '0') then			
+		programCounter <= nextProgramCounter;           
+    end if;
+   end process;
+
+	process (clock)
+	begin
+		--If no stall, read the data and update the next pc
+		if(falling_edge(clock)) then
+			if (insert_stall = '0') then
+				nextProgramCounter <= std_logic_vector(to_unsigned( to_integer(unsigned(programCounter)) + 4,32));
+				instruction_i(7 downto 0) <= ram_block(to_integer(unsigned(programCounter)));
+				instruction_i(15 downto 8) <= ram_block(to_integer(unsigned(programCounter))+1);
+				instruction_i(23 downto 16) <= ram_block(to_integer(unsigned(programCounter))+2);
+				instruction_i(31 downto 24) <= ram_block(to_integer(unsigned(programCounter))+3); 		                                    
+            nextAddress<= programCounter;   
+			end if;			
+		end if;
+	end process;
+    
+pass_inst:process(instruction_i)
+begin
+	if( to_integer(unsigned(programCounter)) > max_inst) then 
+	  instruction <= x"00000020";
+	else
+		instruction <= instruction_i;
+	end if;
+end process;	
+end behavioral;
